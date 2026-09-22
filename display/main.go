@@ -27,11 +27,18 @@ var buttonPins = []machine.Pin{
 
 var digits = []int{0, 0, 0, 0}
 
-var lastButtonStates = []bool{false, false, false, false}
-var lastChangeTime = []time.Time{
-	time.Now(), time.Now(), time.Now(), time.Now(),
-}
-var handled = []bool{false, false, false, false}
+type buttonState int
+
+const (
+	IDLE buttonState = iota
+	DEBOUNCING
+)
+
+var (
+	btnState   = [4]buttonState{IDLE, IDLE, IDLE, IDLE}
+	btnPending = [4]bool{false, false, false, false}
+	btnTimer   = [4]time.Time{}
+)
 
 var numMap = []byte{
 	0b00111111,
@@ -58,30 +65,48 @@ func main() {
 
 	for i, pin := range buttonPins {
 		pin.Configure(machine.PinConfig{Mode: machine.PinInputPulldown})
-		lastButtonStates[i] = pin.Get()
+		idx := i
+		pin.SetInterrupt(machine.PinRising, func(p machine.Pin) {
+			btnPending[idx] = true
+		})
 	}
 
 	for {
-		for i := 0; i < 4; i++ {
-			state := buttonPins[i].Get()
+		handleButtons()
+		refreshDisplay()
+	}
+}
 
-			if state != lastButtonStates[i] {
-				lastChangeTime[i] = time.Now()
-				lastButtonStates[i] = state
-				handled[i] = false
-				continue
-			}
+func handleButtons() {
+	now := time.Now()
 
-			if state && !handled[i] &&
-				time.Since(lastChangeTime[i]) >= 20*time.Millisecond {
-				digits[i]++
-				if digits[i] > 9 {
-					digits[i] = 0
+	for i := 0; i < 4; i++ {
+		if btnPending[i] {
+			buttonPins[i].SetInterrupt(0, nil)
+
+			btnState[i] = DEBOUNCING
+			btnTimer[i] = now
+
+			btnPending[i] = false
+		}
+
+		if btnState[i] == DEBOUNCING {
+			if now.Sub(btnTimer[i]) >= 20*time.Millisecond {
+				if buttonPins[i].Get() {
+					digits[i]++
+					if digits[i] > 9 {
+						digits[i] = 0
+					}
 				}
-				handled[i] = true
+
+				btnState[i] = IDLE
+
+				idx := i
+				buttonPins[i].SetInterrupt(machine.PinRising, func(p machine.Pin) {
+					btnPending[idx] = true
+				})
 			}
 		}
-		refreshDisplay()
 	}
 }
 
