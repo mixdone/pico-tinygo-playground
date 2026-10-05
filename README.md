@@ -24,7 +24,7 @@
 ### Сборка
 
 ```bash
-PATH=$HOME/sdk/go1.22.0/bin:$PATH tinygo build -target=pico -o smth.uf2 main.go
+tinygo build -target=pico -o smth.uf2 main.go
 ```
 
 ### Прошивка

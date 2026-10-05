@@ -107,6 +107,7 @@ func handleButtons() {
 
 				idx := i
 				buttonPins[i].SetInterrupt(machine.PinRising, func(p machine.Pin) {
+
 					btnPending[idx] = true
 				})
 			}
