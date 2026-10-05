@@ -6,13 +6,19 @@ import (
 )
 
 var (
-	dataPin  = machine.GP0
+	spi      = machine.SPI0
 	latchPin = machine.GP1
-	clockPin = machine.GP2
 )
 
+var spiConfig = machine.SPIConfig{
+	Frequency: 10_000_000,
+	Mode:      0,
+	SCK:       machine.GP2,
+	SDO:       machine.GP3,
+}
+
 var digitPins = []machine.Pin{
-	machine.GP3,
+	machine.GP0,
 	machine.GP4,
 	machine.GP5,
 	machine.GP6,
@@ -27,11 +33,18 @@ var buttonPins = []machine.Pin{
 
 var digits = []int{0, 0, 0, 0}
 
-var lastButtonStates = []bool{false, false, false, false}
-var lastChangeTime = []time.Time{
-	time.Now(), time.Now(), time.Now(), time.Now(),
-}
-var handled = []bool{false, false, false, false}
+type buttonState int
+
+const (
+	IDLE buttonState = iota
+	DEBOUNCING
+)
+
+var (
+	btnState   = [4]buttonState{IDLE, IDLE, IDLE, IDLE}
+	btnPending = [4]bool{false, false, false, false}
+	btnTimer   = [4]time.Time{}
+)
 
 var numMap = []byte{
 	0b00111111,
@@ -47,9 +60,10 @@ var numMap = []byte{
 }
 
 func main() {
-	dataPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	spi.Configure(spiConfig)
+
 	latchPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	clockPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	latchPin.High()
 
 	for _, pin := range digitPins {
 		pin.Configure(machine.PinConfig{Mode: machine.PinOutput})
@@ -58,45 +72,52 @@ func main() {
 
 	for i, pin := range buttonPins {
 		pin.Configure(machine.PinConfig{Mode: machine.PinInputPulldown})
-		lastButtonStates[i] = pin.Get()
+		idx := i
+		pin.SetInterrupt(machine.PinRising, func(p machine.Pin) {
+			btnPending[idx] = true
+		})
 	}
 
 	for {
-		for i := 0; i < 4; i++ {
-			state := buttonPins[i].Get()
+		handleButtons()
+		refreshDisplay()
+	}
+}
 
-			if state != lastButtonStates[i] {
-				lastChangeTime[i] = time.Now()
-				lastButtonStates[i] = state
-				handled[i] = false
-				continue
-			}
+func handleButtons() {
+	now := time.Now()
 
-			if state && !handled[i] &&
-				time.Since(lastChangeTime[i]) >= 20*time.Millisecond {
-				digits[i]++
-				if digits[i] > 9 {
-					digits[i] = 0
+	for i := 0; i < 4; i++ {
+		if btnPending[i] {
+			buttonPins[i].SetInterrupt(0, nil)
+			btnState[i] = DEBOUNCING
+			btnTimer[i] = now
+			btnPending[i] = false
+		}
+
+		if btnState[i] == DEBOUNCING {
+			if now.Sub(btnTimer[i]) >= 20*time.Millisecond {
+				if buttonPins[i].Get() {
+					digits[i]++
+					if digits[i] > 9 {
+						digits[i] = 0
+					}
 				}
-				handled[i] = true
+				btnState[i] = IDLE
+
+				idx := i
+				buttonPins[i].SetInterrupt(machine.PinRising, func(p machine.Pin) {
+
+					btnPending[idx] = true
+				})
 			}
 		}
-		refreshDisplay()
 	}
 }
 
 func sendToRegister(b byte) {
 	latchPin.Low()
-	for i := 0; i < 8; i++ {
-		bit := (b >> (7 - uint(i))) & 1
-		if bit == 1 {
-			dataPin.High()
-		} else {
-			dataPin.Low()
-		}
-		clockPin.High()
-		clockPin.Low()
-	}
+	spi.Tx([]byte{b}, nil)
 	latchPin.High()
 }
 
@@ -106,7 +127,6 @@ func refreshDisplay() {
 			pin.High()
 		}
 
-		sendToRegister(0x00)
 		sendToRegister(numMap[digits[i]])
 		digitPins[i].Low()
 		time.Sleep(500 * time.Microsecond)
